@@ -1,0 +1,43 @@
+import pandas as pd
+import numpy as np
+import h3
+from math import radians, sin, cos, sqrt, atan2
+
+# Função Haversine e resolução H3
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371000
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return R * c
+
+def determine_h3_resolution(avg_distance):
+    thresholds = [200, 600, 2000, 6000, 15000]
+    resolutions = [6, 5, 4, 3, 2, 1]
+    return resolutions[np.searchsorted(thresholds, avg_distance)]
+
+# Calculando o primeiro ponto válido, distância média e h3_index na base histórica
+df_hist['first_latitude'] = df_hist.loc[df_hist['loc_valid']].groupby('codigoCliente')['latitude'].transform('first')
+df_hist['first_longitude'] = df_hist.loc[df_hist['loc_valid']].groupby('codigoCliente')['longitude'].transform('first')
+df_hist['distance'] = np.where(df_hist['loc_valid'],
+                               df_hist.apply(lambda row: haversine_distance(row['latitude'], row['longitude'], 
+                                                                            row['first_latitude'], row['first_longitude']), axis=1),
+                               np.nan)
+
+average_distance_df = df_hist.groupby('codigoCliente')['distance'].mean().reset_index()
+average_distance_df['resolution'] = average_distance_df['distance'].apply(determine_h3_resolution)
+df_hist = df_hist.merge(average_distance_df[['codigoCliente', 'resolution']], on='codigoCliente', how='left')
+df_hist['h3_index'] = df_hist.apply(lambda row: h3.latlng_to_cell(row['latitude'], row['longitude'], int(row['resolution'])), axis=1)
+
+# Aplicando a resolução H3 e gerando h3_index na base de validação
+df_valid = df_valid.merge(average_distance_df[['codigoCliente', 'resolution']], on='codigoCliente', how='left')
+df_valid['h3_index'] = df_valid.apply(lambda row: h3.latlng_to_cell(row['latitude'], row['longitude'], int(row['resolution'])), axis=1)
+
+# Lista de h3_index históricos para cada cliente
+historico_h3 = df_hist.groupby('codigoCliente')['h3_index'].apply(list).reset_index()
+historico_h3.columns = ['codigoCliente', 'h3_index_historico']
+
+# Unindo lista histórica com a base de validação e verificando h3_match
+df_valid = df_valid.merge(historico_h3, on='codigoCliente', how='left')
+df_valid['h3_match'] = df_valid.apply(lambda row: row['h3_index'] in row['h3_index_historico'], axis=1)
